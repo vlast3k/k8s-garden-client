@@ -1,4 +1,5 @@
 ARG GO_VERSION=1.27
+ARG BUILDPLATFORM=linux/amd64
 
 FROM gcc:15 AS gccbuild
 
