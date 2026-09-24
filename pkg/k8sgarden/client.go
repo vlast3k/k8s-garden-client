@@ -253,7 +253,7 @@ func (c *client) Create(spec garden.ContainerSpec) (garden.Container, error) {
 			EnableServiceLinks:            ptr.To(false),
 			NodeName:                      c.node.GetName(),
 			TerminationGracePeriodSeconds: ptr.To(int64(5)),
-			HostUsers:                     ptr.To(true), // should work with "false" too, but fails in KinD
+			HostUsers:                     ptr.To(spec.Privileged),
 			RestartPolicy:                 corev1.RestartPolicyNever,
 			Resources: &corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{
@@ -264,12 +264,6 @@ func (c *client) Create(spec garden.ContainerSpec) (garden.Container, error) {
 				},
 			},
 			Volumes: []corev1.Volume{
-				{
-					Name: "tmp",
-					VolumeSource: corev1.VolumeSource{
-						EmptyDir: &corev1.EmptyDirVolumeSource{},
-					},
-				},
 				{
 					Name: "init-bin",
 					VolumeSource: corev1.VolumeSource{
@@ -303,10 +297,6 @@ func (c *client) Create(spec garden.ContainerSpec) (garden.Container, error) {
 					Ports:           ports,
 					Command:         []string{"/tmp/garden-init"},
 					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      "tmp",
-							MountPath: "/tmp",
-						},
 						{
 							Name:      "init-bin",
 							MountPath: "/tmp/garden-init",

@@ -389,7 +389,11 @@ func initializeBBSClient(
 
 func repURL(config config.RepConfig) string {
 	port := strings.Split(config.ListenAddrSecurable, ":")[1]
-	return fmt.Sprintf("https://%s:%s", os.Getenv("NODE_IP"), port)
+	host := os.Getenv("NODE_IP")
+	if advertiseDomain := strings.TrimSuffix(os.Getenv("REP_ADVERTISE_DOMAIN"), "."); advertiseDomain != "" {
+		host = fmt.Sprintf("%s.%s", config.CellID, advertiseDomain)
+	}
+	return fmt.Sprintf("https://%s:%s", host, port)
 }
 
 func repAddress(logger lager.Logger, config config.RepConfig) string {

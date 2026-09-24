@@ -5,6 +5,9 @@
     "advertiseDomain": {
       "type": "string"
     },
+    "repAdvertiseDomain": {
+      "type": "string"
+    },
     "bbsAddress": {
       "type": "string"
     },

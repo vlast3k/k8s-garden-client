@@ -434,8 +434,9 @@ var _ = Describe("Client", func() {
 			Expect(pod.Spec.Containers[1].Ports).To(HaveLen(1))
 			Expect(pod.Spec.Containers[1].Ports[0].HostPort).To(Equal(int32(62000)))
 			Expect(pod.Spec.Containers[1].Ports[0].ContainerPort).To(Equal(int32(80)))
+			Expect(pod.Spec.HostUsers).To(PointTo(BeFalse()))
 
-			Expect(pod.Spec.Volumes).To(HaveLen(6))
+			Expect(pod.Spec.Volumes).To(HaveLen(5))
 			Expect(pod.Spec.Containers[0].VolumeMounts).To(ContainElements(
 				MatchFields(IgnoreExtras, Fields{
 					"MountPath": Equal("/container/data"),
@@ -482,6 +483,28 @@ var _ = Describe("Client", func() {
 			containers, err := gardenClient.Containers(nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(containers).To(HaveLen(1))
+		})
+
+		It("uses host users for privileged containers", func() {
+			spec := garden.ContainerSpec{
+				Handle:     "privileged-container",
+				Privileged: true,
+				Limits: garden.Limits{
+					Memory: garden.MemoryLimits{LimitInBytes: 256 * 1024 * 1024},
+					Disk:   garden.DiskLimits{ByteHard: 1024 * 1024 * 1024},
+				},
+				Image: garden.ImageRef{URI: "cflinuxfs4"},
+			}
+
+			_, err := gardenClient.Create(spec)
+			Expect(err).NotTo(HaveOccurred())
+
+			var pod corev1.Pod
+			Expect(k8sClient.Get(context.Background(), ctrlclient.ObjectKey{
+				Name:      "privileged-container",
+				Namespace: "cf-workloads",
+			}, &pod)).To(Succeed())
+			Expect(pod.Spec.HostUsers).To(PointTo(BeTrue()))
 		})
 
 		It("creates a docker app container successfully", func() {

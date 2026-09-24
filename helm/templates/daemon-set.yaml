@@ -35,26 +35,13 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: REP_ADVERTISE_DOMAIN
+              value: {{ .Values.repAdvertiseDomain | quote }}
           command:
             - sh
             - -c
             - |
               set -e
-
-              mkdir -p /etc/ssl/certs/rep && \
-              openssl req -new -newkey rsa:2048 -nodes \
-                -subj "/CN=rep/O=cf" \
-                -keyout /etc/ssl/certs/rep/tls.key \
-                -out /etc/ssl/certs/rep/rep.csr && \
-              echo "subjectAltName=IP:${NODE_IP},IP:127.0.0.1,DNS:localhost" > /tmp/rep.ext && \
-              echo '01' > /tmp/rep.srl && \
-              openssl x509 -req -in /etc/ssl/certs/rep/rep.csr \
-                -CA /etc/ssl/certs/instance-identity/tls.crt \
-                -CAkey /etc/ssl/certs/instance-identity/tls.key \
-                -CAserial /tmp/rep.srl -days 365 -sha256 \
-                -extfile /tmp/rep.ext \
-                -out /etc/ssl/certs/rep/tls.crt && \
-              cp /etc/ssl/certs/instance-identity/tls.crt /etc/ssl/certs/rep/ca.crt
 
               node=$(kubectl get node $NODE_NAME -o json)
               export NODE_UID=$(echo "$node" | jq -r '.metadata.uid')
@@ -63,6 +50,26 @@ spec:
                 echo "ZONE label 'cloudfoundry.org/zone' is not set"
                 exit 1
               fi
+
+              rep_advertise_san=""
+              if [ -n "$REP_ADVERTISE_DOMAIN" ]; then
+                rep_advertise_san=",DNS:${NODE_UID}.${REP_ADVERTISE_DOMAIN%.}"
+              fi
+
+              mkdir -p /etc/ssl/certs/rep && \
+              openssl req -new -newkey rsa:2048 -nodes \
+                -subj "/CN=rep/O=cf" \
+                -keyout /etc/ssl/certs/rep/tls.key \
+                -out /etc/ssl/certs/rep/rep.csr && \
+              echo "subjectAltName=IP:${NODE_IP},IP:127.0.0.1,DNS:localhost${rep_advertise_san}" > /tmp/rep.ext && \
+              echo '01' > /tmp/rep.srl && \
+              openssl x509 -req -in /etc/ssl/certs/rep/rep.csr \
+                -CA /etc/ssl/certs/instance-identity/tls.crt \
+                -CAkey /etc/ssl/certs/instance-identity/tls.key \
+                -CAserial /tmp/rep.srl -days 365 -sha256 \
+                -extfile /tmp/rep.ext \
+                -out /etc/ssl/certs/rep/tls.crt && \
+              cp /etc/ssl/certs/instance-identity/tls.crt /etc/ssl/certs/rep/ca.crt
 
               export PLACEMENT_TAGS=$(echo "$node" | jq -c '(.metadata.annotations["cloudfoundry.org/placement-tags"] // "") | if . == "" then [] else split(",") | map(trim) end')
               export OPTIONAL_PLACEMENT_TAGS=$(echo "$node" | jq -c '(.metadata.annotations["cloudfoundry.org/optional-placement-tags"] // "") | if . == "" then [] else split(",") | map(trim) end')
@@ -127,6 +134,8 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: status.hostIP
+          - name: REP_ADVERTISE_DOMAIN
+            value: {{ .Values.repAdvertiseDomain | quote }}
           - name: WORKLOADS_NAMESPACE
             value: {{ .Values.workloadsNamespace }}
           {{- if .Values.resources }}
