@@ -152,7 +152,7 @@ func (c *container) run(spec garden.ProcessSpec, io garden.ProcessIO, cleanEnv b
 		processSpec,
 		io,
 		c.taskMap[targetContainer],
-	), nil
+	)
 }
 
 // StreamIn implements [garden.Container].

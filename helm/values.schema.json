@@ -80,6 +80,38 @@
       },
       "type": "object"
     },
+    "metrics": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "address"
+      ],
+      "type": "object"
+    },
+    "monitoring": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "telegrafImage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "address",
+        "enabled",
+        "telegrafImage"
+      ],
+      "type": "object"
+    },
     "nodeSelector": {
       "type": ["object", "null"]
     },

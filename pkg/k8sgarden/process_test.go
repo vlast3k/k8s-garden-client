@@ -1,6 +1,8 @@
 package k8sgarden_test
 
 import (
+	"context"
+	"errors"
 	"io"
 	"strings"
 	"syscall"
@@ -18,21 +20,30 @@ import (
 
 var _ = Describe("Process", func() {
 	var (
-		testProcess k8sgarden.Process
-		logger      *lagertest.TestLogger
-		fakeTask    *containerdfakes.FakeTask
-		fakeProcess *containerdfakes.FakeProcess
-		processSpec *specs.Process
-		processIO   garden.ProcessIO
-		exitChan    chan ctrdclient.ExitStatus
+		testProcess  k8sgarden.Process
+		logger       *lagertest.TestLogger
+		fakeTask     *containerdfakes.FakeTask
+		fakeProcess  *containerdfakes.FakeProcess
+		processSpec  *specs.Process
+		processIO    garden.ProcessIO
+		exitChan     chan ctrdclient.ExitStatus
+		processCalls []string
 	)
 
 	BeforeEach(func() {
 		logger = lagertest.NewTestLogger("process-test")
 		exitChan = make(chan ctrdclient.ExitStatus, 1)
+		processCalls = nil
 
 		fakeProcess = &containerdfakes.FakeProcess{}
-		fakeProcess.WaitReturns(exitChan, nil)
+		fakeProcess.WaitCalls(func(context.Context) (<-chan ctrdclient.ExitStatus, error) {
+			processCalls = append(processCalls, "wait")
+			return exitChan, nil
+		})
+		fakeProcess.StartCalls(func(context.Context) error {
+			processCalls = append(processCalls, "start")
+			return nil
+		})
 
 		fakeTask = &containerdfakes.FakeTask{}
 		fakeTask.IDReturns("test-task")
@@ -55,13 +66,15 @@ var _ = Describe("Process", func() {
 			Stderr: io.Discard,
 		}
 
-		testProcess = k8sgarden.NewProcess(
+		var err error
+		testProcess, err = k8sgarden.NewProcess(
 			logger,
 			"test-process",
 			processSpec,
 			processIO,
 			fakeTask,
 		)
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	Describe("ID", func() {
@@ -71,7 +84,12 @@ var _ = Describe("Process", func() {
 	})
 
 	Describe("Wait and Signal", func() {
-		It("starts the process and sends signals correctly", func() {
+		It("starts the process before waiting and sends signals correctly", func() {
+			Expect(fakeTask.ExecCallCount()).To(Equal(1))
+			Expect(fakeProcess.WaitCallCount()).To(Equal(1))
+			Expect(fakeProcess.StartCallCount()).To(Equal(1))
+			Expect(processCalls).To(Equal([]string{"wait", "start"}))
+
 			exitStatus := ctrdclient.NewExitStatus(42, time.Now(), nil)
 			exitChan <- *exitStatus
 			exitCode, err := testProcess.Wait()
@@ -87,6 +105,35 @@ var _ = Describe("Process", func() {
 			Expect(fakeProcess.KillCallCount()).To(Equal(2))
 			_, signal, _ = fakeProcess.KillArgsForCall(1)
 			Expect(signal).To(Equal(syscall.SIGKILL))
+		})
+	})
+
+	Describe("creation failures", func() {
+		It("returns an exec error", func() {
+			fakeTask.ExecReturns(nil, errors.New("exec failed"))
+
+			_, err := k8sgarden.NewProcess(logger, "failed-process", processSpec, processIO, fakeTask)
+
+			Expect(err).To(MatchError("exec failed"))
+		})
+
+		It("cleans up when registering for exit fails", func() {
+			fakeProcess.WaitReturns(nil, errors.New("wait failed"))
+
+			_, err := k8sgarden.NewProcess(logger, "failed-process", processSpec, processIO, fakeTask)
+
+			Expect(err).To(MatchError("wait failed"))
+			Expect(fakeProcess.StartCallCount()).To(Equal(1))
+			Expect(fakeProcess.DeleteCallCount()).To(Equal(1))
+		})
+
+		It("cleans up when starting fails", func() {
+			fakeProcess.StartReturns(errors.New("start failed"))
+
+			_, err := k8sgarden.NewProcess(logger, "failed-process", processSpec, processIO, fakeTask)
+
+			Expect(err).To(MatchError("start failed"))
+			Expect(fakeProcess.DeleteCallCount()).To(Equal(1))
 		})
 	})
 })

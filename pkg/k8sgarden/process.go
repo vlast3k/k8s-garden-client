@@ -16,8 +16,8 @@ import (
 type process struct {
 	log     lager.Logger
 	id      string
-	io      garden.ProcessIO
 	process ctrdclient.Process
+	status  <-chan ctrdclient.ExitStatus
 
 	task ctrdclient.Task
 	spec *specs.Process
@@ -35,14 +35,36 @@ func NewProcess(
 	spec *specs.Process,
 	io garden.ProcessIO,
 	task ctrdclient.Task,
-) Process {
-	return &process{
-		log:  log,
-		id:   id,
-		spec: spec,
-		io:   io,
-		task: task,
+) (Process, error) {
+	containerdProcess, err := task.Exec(context.Background(), id, spec, cio.NewCreator(cio.WithStreams(io.Stdin, io.Stdout, io.Stderr), cio.WithFIFODir("/var/lib/rep/containerd_fifo")))
+	if err != nil {
+		return nil, err
 	}
+
+	status, err := containerdProcess.Wait(context.Background())
+	if err != nil {
+		cleanupProcess(containerdProcess)
+		return nil, err
+	}
+
+	if err := containerdProcess.Start(context.Background()); err != nil {
+		cleanupProcess(containerdProcess)
+		return nil, err
+	}
+
+	p := &process{
+		log:     log,
+		id:      id,
+		process: containerdProcess,
+		status:  status,
+		spec:    spec,
+		task:    task,
+	}
+	if io.Stdin != nil {
+		go p.closeStdin()
+	}
+
+	return p, nil
 }
 
 // ID implements [garden.Process].
@@ -65,31 +87,7 @@ func (p *process) Signal(signal garden.Signal) error {
 func (p *process) Wait() (int, error) {
 	p.log.Info("waiting-for-process-to-exit")
 	defer p.log.Info("process-exited")
-	var err error
-
-	p.process, err = p.task.Exec(context.Background(), p.id, p.spec, cio.NewCreator(cio.WithStreams(p.io.Stdin, p.io.Stdout, p.io.Stderr), cio.WithFIFODir("/var/lib/rep/containerd_fifo")))
-	if err != nil {
-		return -1, err
-	}
-
-	if err := p.process.Start(context.Background()); err != nil {
-		return -1, err
-	}
-
-	// The shim keeps its own writer open on the stdin FIFO, so the process never
-	// sees EOF on stdin until we explicitly close it. Without this, stdin-reading
-	// processes such as the `tar -xf -` used by StreamIn block forever. The tar
-	// bytes still flow through cio's own stdin writer; this only drops the shim's
-	// redundant keep-alive writer.
-	if p.io.Stdin != nil {
-		go p.closeStdin()
-	}
-
-	statusChan, err := p.process.Wait(context.Background())
-	if err != nil {
-		return -1, err
-	}
-	exitStatus := <-statusChan
+	exitStatus := <-p.status
 
 	// wait for io to also catch daemon processes
 	var closeErr error
@@ -99,9 +97,16 @@ func (p *process) Wait() (int, error) {
 		p.log.Info("io-finished")
 		closeErr = io.Close()
 	}
-	_, err = p.process.Delete(context.Background())
+	_, err := p.process.Delete(context.Background())
 
 	return int(exitStatus.ExitCode()), errors.Join(exitStatus.Error(), err, closeErr)
+}
+
+func cleanupProcess(p ctrdclient.Process) {
+	if processIO := p.IO(); processIO != nil {
+		_ = processIO.Close()
+	}
+	_, _ = p.Delete(context.Background())
 }
 
 // closeStdin closes the process's stdin so stdin-reading processes get EOF,
