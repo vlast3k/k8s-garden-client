@@ -32,6 +32,14 @@ stacks:
 
 workloadsNamespace: cf-workloads
 
+metrics:
+  address: "127.0.0.1:9090"
+
+monitoring:
+  enabled: false
+  address: ""
+  telegrafImage: telegraf:1.33-alpine
+
 pauseImage: registry.k8s.io/pause:3.10.2
 
 nodeSelector:

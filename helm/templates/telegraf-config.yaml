@@ -1,0 +1,30 @@
+{{- if .Values.monitoring.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k8s-rep-telegraf-config
+  labels:
+    app: k8s-rep
+data:
+  telegraf.conf: |
+    [agent]
+      interval = "15s"
+      round_interval = true
+      metric_batch_size = 1000
+      metric_buffer_limit = 10000
+      flush_interval = "15s"
+      omit_hostname = false
+
+    [global_tags]
+      deployment = "cf-on-k8s"
+      job = "k8s-rep"
+
+    [[inputs.prometheus]]
+      urls = ["http://127.0.0.1:9090/metrics"]
+      metric_version = 2
+
+    [[outputs.socket_writer]]
+      address = "tcp://{{ .Values.monitoring.address }}"
+      data_format = "influx"
+{{- end }}

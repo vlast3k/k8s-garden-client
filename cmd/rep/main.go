@@ -25,6 +25,7 @@ import (
 	"code.cloudfoundry.org/executor"
 	"code.cloudfoundry.org/go-loggregator/v9/runtimeemitter"
 	k8sexecutor "code.cloudfoundry.org/k8s-garden-client/pkg/executor"
+	"code.cloudfoundry.org/k8s-garden-client/pkg/prometheusmetrics"
 	"code.cloudfoundry.org/lager/v3"
 	"code.cloudfoundry.org/lager/v3/lagerflags"
 	"code.cloudfoundry.org/localip"
@@ -91,6 +92,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Prometheus metrics endpoint (Gate 1: loopback-only, pod-local).
+	metricsAddr := os.Getenv("REP_METRICS_ADDRESS")
+	if metricsAddr == "" {
+		metricsAddr = "127.0.0.1:9090"
+	}
+	if err := prometheusmetrics.ValidateLoopbackAddress(metricsAddr); err != nil {
+		logger.Error("invalid-metrics-address", err)
+		os.Exit(1)
+	}
+	repMetrics := prometheusmetrics.NewRepMetrics()
+	metricsClient := prometheusmetrics.NewIngressClientWrapper(metronClient, repMetrics)
+
 	rootFSMap := repConfig.PreloadedRootFS.StackPathMap()
 	sidecarRootFSPath := repConfig.SidecarRootFSPath
 	sidecarRootFS := repConfig.SidecarRootFS
@@ -133,7 +146,7 @@ func main() {
 	preloadedRootFSesWithVersions := rep.StackPathMap(preloadedRootFSes).StackVersionList()
 	extraRootFSesWithVersions := extraRootFSes.StackVersionList()
 
-	executorClient, containerMetricsProvider, executorMembers, err := k8sexecutor.Initialize(logger, repConfig, repConfig.CellID, repConfig.Zone, rootFSMap, sidecarRootFSPath, metronClient, clock)
+	executorClient, containerMetricsProvider, executorMembers, err := k8sexecutor.Initialize(logger, repConfig, repConfig.CellID, repConfig.Zone, rootFSMap, sidecarRootFSPath, metricsClient, clock)
 	if err != nil {
 		logger.Error("failed-to-initialize-executor", err)
 		os.Exit(1)
@@ -180,7 +193,7 @@ func main() {
 	requestTypes := []string{
 		"State", "ContainerMetrics", "Perform", "Reset", "UpdateLRPInstance", "StopLRPInstance", "CancelTask", // over https only
 	}
-	requestMetrics := helpers.NewRequestMetricsNotifier(logger, clock, metronClient, time.Duration(repConfig.ReportInterval), requestTypes)
+	requestMetrics := helpers.NewRequestMetricsNotifier(logger, clock, metricsClient, time.Duration(repConfig.ReportInterval), requestTypes)
 	httpServer := initializeServer(auctionCellRep, executorClient, evacuatable, requestMetrics, logger, repConfig, false)
 	httpsServer := initializeServer(auctionCellRep, executorClient, evacuatable, requestMetrics, logger, repConfig, true)
 
@@ -191,7 +204,7 @@ func main() {
 		repConfig.LayeringMode,
 		bbsClient,
 		executorClient,
-		metronClient,
+		metricsClient,
 		evacuationReporter,
 	)
 
@@ -203,7 +216,7 @@ func main() {
 		bbsClient,
 		executorClient,
 		clock,
-		metronClient,
+		metricsClient,
 	)
 
 	bulker := harmonizer.NewBulker(
@@ -214,10 +227,11 @@ func main() {
 		clock,
 		opGenerator,
 		queue,
-		metronClient,
+		metricsClient,
 	)
 
 	members := grouper.Members{
+		{Name: "metrics-server", Runner: prometheusmetrics.NewMetricsServer(metricsAddr, repMetrics)},
 		{Name: "presence", Runner: cellPresence},
 		{Name: "http_server", Runner: httpServer},
 		{Name: "https_server", Runner: httpsServer},
