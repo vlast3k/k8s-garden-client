@@ -1,0 +1,71 @@
+{{- if .Values.nodeMonitoring.enabled }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-telegraf
+  labels:
+    app: node-telegraf
+    component: cf-on-k8s
+spec:
+  selector:
+    matchLabels:
+      app: node-telegraf
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 3
+  template:
+    metadata:
+      labels:
+        app: node-telegraf
+        component: cf-on-k8s
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/node-telegraf-config.yaml") . | sha256sum }}
+    spec:
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      hostNetwork: false
+      hostPID: false
+      containers:
+        - name: telegraf
+          image: {{ .Values.nodeMonitoring.telegrafImage }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          env:
+            - name: HOST_PROC
+              value: /hostfs/proc
+            - name: HOST_SYS
+              value: /hostfs/sys
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: config
+              mountPath: /etc/telegraf
+              readOnly: true
+            - name: hostfs-proc
+              mountPath: /hostfs/proc
+              readOnly: true
+            - name: hostfs-sys
+              mountPath: /hostfs/sys
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: node-telegraf-config
+        - name: hostfs-proc
+          hostPath:
+            path: /proc
+        - name: hostfs-sys
+          hostPath:
+            path: /sys
+{{- end }}

@@ -112,6 +112,26 @@
       ],
       "type": "object"
     },
+    "nodeMonitoring": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "telegrafImage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "address",
+        "enabled",
+        "telegrafImage"
+      ],
+      "type": "object"
+    },
     "nodeSelector": {
       "type": ["object", "null"]
     },

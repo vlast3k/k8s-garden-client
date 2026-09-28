@@ -40,6 +40,11 @@ monitoring:
   address: ""
   telegrafImage: telegraf:1.33-alpine
 
+nodeMonitoring:
+  enabled: false
+  address: ""
+  telegrafImage: telegraf:1.33-alpine
+
 pauseImage: registry.k8s.io/pause:3.10.2
 
 nodeSelector:
