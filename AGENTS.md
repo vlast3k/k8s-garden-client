@@ -322,6 +322,80 @@ committed to git — recreate as needed.
 - `0.7.1-phase1.1` — Phase 1 baseline
 - `0.8.0-phase4.1` — Phase 4 Gate 1 (Prometheus endpoint)
 - `0.8.0-phase4.2` — Phase 4 Gate 2 (Telegraf sidecar — no image change, Helm only)
+- `0.8.0-phase4.3` — CFAPI-319 (node-level Telegraf DaemonSet added)
+
+## Node-Level Telegraf DaemonSet (CFAPI-319)
+
+Separate DaemonSet collecting host-level metrics from K8s worker nodes.
+
+### Helm Values
+
+```yaml
+nodeMonitoring:
+  enabled: true                      # enables DaemonSet + ConfigMap
+  address: "10.0.67.6:8094"         # same Riemann endpoint as rep sidecar
+  telegrafImage: telegraf:1.33-alpine
+```
+
+When `nodeMonitoring.enabled` is `false` (default), no node-telegraf
+resources are rendered.
+
+### Pipeline Architecture
+
+```
+node-telegraf DaemonSet (1 pod per cell node)
+  inputs: cpu, mem, swap, disk, diskio, net, system
+  interval: 60s, flush: 60s
+  hostPath: /proc → /hostfs/proc, /sys → /hostfs/sys (read-only)
+  hostname: spec.nodeName via downward API ($HOSTNAME env var)
+  → outputs.socket_writer (InfluxDB line protocol)
+  → Riemann (10.0.67.6:8094) — passes native measurement names through
+  → InfluxDB
+```
+
+### Data Shape in InfluxDB
+
+Seven separate measurements (native Telegraf names, NOT `CF.*` prefixed):
+
+| Measurement | Key Fields |
+|-------------|-----------|
+| `cpu` | `usage_idle`, `usage_user`, `usage_system`, `usage_iowait` |
+| `mem` | `used_percent`, `available`, `total`, `used` |
+| `swap` | `used_percent`, `free`, `total` |
+| `disk` | `used_percent`, `free`, `total` (per mount point) |
+| `diskio` | `reads`, `writes`, `read_bytes`, `write_bytes` (per device) |
+| `net` | `bytes_recv`, `bytes_sent`, `packets_recv`, `packets_sent` |
+| `system` | `load1`, `load5`, `load15`, `n_cpus`, `uptime` |
+
+Tags: `deployment=cf-on-k8s`, `job=k8s-node`, `host=<ec2-node-name>`
+
+Query example:
+```sql
+SELECT mean("usage_idle") FROM "cpu"
+  WHERE "deployment" = 'cf-on-k8s' AND "job" = 'k8s-node'
+  GROUP BY time(5m), "host"
+```
+
+### Known Issues
+
+- **Memory limit must be 256Mi** — Telegraf 1.33 with system inputs OOMKills
+  at 128Mi on ~73% of nodes. Same behavior as the rep Telegraf sidecar.
+- **diskio warnings** — `Unable to gather disk name for "nvme0n1"` — non-fatal,
+  container lacks `/dev` mount. Metrics still collected via `/proc/diskstats`.
+- **Hostname requires explicit config** — Telegraf defaults to pod hostname.
+  Fixed via `hostname = "$HOSTNAME"` in `[agent]` config with `spec.nodeName`
+  injected as `HOSTNAME` env var through Kubernetes downward API.
+
+### IaC Integration
+
+The `render-manifests.sh` passes `nodeMonitoring.*` values reusing the same
+`monitoring_address` and `telegraf_image` as the rep sidecar. Chart version
+`0.8.0-phase4.3` or later is required. The full deploy cycle is:
+
+```bash
+iac -d cf-on-k8s lifecycle deploy   # includes create_manifest + deploy
+iac -d cf-on-k8s action verify      # confirms all DaemonSets healthy
+```
 
 ## Key Architecture Notes
 
@@ -336,6 +410,9 @@ committed to git — recreate as needed.
   `127.0.0.1:9090`). Set via Helm `metrics.address`.
 - **Telegraf sidecar** is gated on `monitoring.enabled`. When disabled,
   the DaemonSet is identical to Gate 1 (2 containers: k8s-rep + watcher).
-- **Riemann address** is currently hardcoded per-landscape in the rendered
-  manifest. For product integration (Gate 5), it should come from IaC
-  monitoring imports (`riemann.host` + `riemann.influxdb_line_port`).
+- **Riemann address** comes from IaC monitoring imports
+  (`riemann.host` + `riemann.influxdb_line_port`), passed through
+  `render-manifests.sh` to both `monitoring.address` and
+  `nodeMonitoring.address`.
+- **Riemann passes native Telegraf measurement names** (`cpu`, `mem`, etc.)
+  without requiring a `CF.*` prefix. Verified on lod-aws-0723.
